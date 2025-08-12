@@ -1,18 +1,25 @@
 # wp-static-scraper
 
-A Go application that scrapes websites and creates fully self-contained static HTML copies with all assets (CSS, JavaScript, fonts) downloaded and localized.
+A Go application that scrapes websites and creates fully self-contained static HTML copies with all assets (CSS, JavaScript, images, fonts) downloaded and localized for completely offline viewing.
 
 ## Features
 
-- Downloads and saves complete web pages as static HTML
-- Localizes all external CSS stylesheets
-- Localizes all external JavaScript files
-- **Advanced font discovery**: Automatically downloads and localizes all font files referenced in CSS (including FontAwesome and other web fonts)
+- **Complete website capture**: Downloads and saves web pages as fully self-contained static HTML
+- **CSS & JavaScript**: Localizes all external stylesheets and scripts (including preload links)
+- **Image processing**: Downloads all images including responsive `srcset` variants, background images, and meta tag images
+- **Advanced font discovery**: Automatically downloads font files from CSS, including:
+  - Protocol-relative URLs (`//domain.com/font.woff2`)
+  - Inline CSS within `<style>` tags
+  - FontAwesome and Google Fonts
+  - All formats: TTF, WOFF, WOFF2, EOT, SVG
 - **Smart asset detection**: Finds both absolute URLs and relative paths in CSS files
-- **Built-in HTTP server**: Serves scraped content locally for immediate preview
-- **Auto-cleanup**: Automatically removes old files before each scrape for clean results
-- Creates organized directory structure with fonts stored in `assets/fonts/`
-- Preserves original HTML structure while updating asset references
+- **Error prevention**: 
+  - Removes source map references to prevent browser errors
+  - Suppresses development server connection errors
+  - Handles security errors from service worker origin mismatches
+- **Built-in HTTP server**: Serves scraped content locally with proper routing
+- **Auto-cleanup**: Automatically removes old files before each scrape
+- **Organized structure**: Creates clean directory structure with separate folders for different asset types
 
 ## Installation
 
@@ -56,9 +63,10 @@ The application supports two main commands: `scrape` for downloading websites an
 ## Output Structure
 
 When you run the scraper, it creates:
-- The main HTML file (default: `index.html`)
+- The main HTML file (default: `index.html`) with all references updated to local assets
 - `assets/` directory containing downloaded CSS and JavaScript files
 - `assets/fonts/` directory containing all downloaded font files (TTF, WOFF, WOFF2, EOT, SVG formats)
+- `assets/images/` directory containing all downloaded images (PNG, JPG, GIF, WebP, SVG formats)
 
 ## Example Workflow
 
@@ -79,33 +87,57 @@ assets/
   ├── all.min.css
   ├── style.css
   ├── main.js
-  ├── other-assets...
-  └── fonts/
-      ├── fa-brands-400.woff2
-      ├── fa-regular-400.woff2
-      ├── fa-solid-900.woff2
-      ├── font1.ttf
-      └── other-fonts...
+  ├── other-scripts.js
+  ├── fonts/
+  │   ├── fa-brands-400.woff2
+  │   ├── fa-regular-400.woff2
+  │   ├── fa-solid-900.woff2
+  │   ├── Montserrat-Regular.woff2
+  │   └── other-fonts...
+  └── images/
+      ├── logo.png
+      ├── hero-image.jpg
+      ├── banner-mobile.webp
+      ├── icon.svg
+      └── other-images...
 ```
 
 ## Key Features
 
-### Comprehensive Font Support
-The scraper intelligently discovers and downloads all font formats referenced in CSS files:
+### Comprehensive Asset Support
+The scraper intelligently discovers and downloads all assets referenced in web pages:
+
+**Fonts:**
 - **FontAwesome**: Automatically detects and downloads all FontAwesome font variants
 - **Google Fonts**: Downloads custom fonts from Google Fonts and other CDNs
+- **Protocol-relative URLs**: Handles `//domain.com/font.woff2` references
+- **Inline CSS**: Processes fonts in `<style>` tags
 - **Multiple formats**: Supports TTF, WOFF, WOFF2, EOT, and SVG font formats
-- **Relative paths**: Handles both absolute URLs and relative paths in CSS (e.g., `../webfonts/`)
+- **Relative paths**: Handles both absolute URLs and relative paths (e.g., `../webfonts/`)
+
+**Images:**
+- **Responsive images**: Processes `srcset` attributes with size descriptors
+- **Background images**: Extracts images from inline `style` attributes
+- **Meta images**: Downloads og:image, twitter:image, and other meta tag images
+- **Lazy loading**: Handles `data-src` attributes for deferred loading
+- **All formats**: PNG, JPG, GIF, WebP, SVG, and more
+
+**Scripts & Styles:**
+- **Preload links**: Properly handles `<link rel="preload">` tags
+- **Source maps**: Removes `sourceMappingURL` references to prevent errors
+- **Error suppression**: Injects scripts to handle development server errors
 
 ### Smart Asset Detection
-- Parses CSS files to find all `url()` references
+- Parses HTML, CSS, and JavaScript to find all asset references
 - Resolves relative paths against the original website's base URL
-- Updates CSS to use local font paths for offline viewing
+- Updates all references to use local paths for offline viewing
+- Handles complex CSS with nested imports and font-face declarations
 
 ### Clean Workflow
 - Each scrape automatically removes previous assets and HTML files
 - Prevents mixing assets from different websites
 - Ensures fresh, clean results every time
+- Creates organized directory structure for easy navigation
 
 ## Requirements
 
