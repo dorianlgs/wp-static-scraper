@@ -23,7 +23,7 @@ Key improvements include:
 
 ```bash
 # Build the application
-go build -o wp-static-scraper main.go
+go build -ldflags "-s -w" -o wp-static-scraper main.go
 
 # Run the application (scraping)
 go run main.go scrape -url "https://example.com"

@@ -26,7 +26,7 @@ A Go application that scrapes websites and creates fully self-contained static H
 ## Installation
 
 ```bash
-go build -o wp-static-scraper main.go
+go build -ldflags "-s -w" -o wp-static-scraper main.go
 ```
 
 ## Usage
