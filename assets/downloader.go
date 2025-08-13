@@ -49,9 +49,15 @@ func DownloadResource(resourceURL, ext string, base *url.URL) (string, error) {
 		data = []byte(cssContent)
 	}
 
-	// If JS, remove source map references
+	// If JS, process embedded URLs and remove source map references
 	if ext == "js" {
 		jsContent := string(data)
+		// Process JavaScript for embedded resource URLs (like template CSS files)
+		jsContent, err = LocalizeJavaScriptURLs(jsContent, base)
+		if err != nil {
+			return "", err
+		}
+		// Remove source map references
 		jsContent = utils.RemoveSourceMapReferences(jsContent)
 		data = []byte(jsContent)
 	}

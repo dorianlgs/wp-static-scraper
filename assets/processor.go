@@ -83,7 +83,13 @@ func LocalizeAssets(htmlContent string, base *url.URL, concurrency int) (string,
 		fmt.Printf("Downloaded %d fonts successfully\n", len(fontMap))
 	}
 	
-	// Phase 4: Update HTML with all localized asset references
+	// Phase 4: Process inline JavaScript for template URLs (like Complianz)
+	htmlContent, err = processInlineJavaScript(htmlContent, base)
+	if err != nil {
+		return "", err
+	}
+	
+	// Phase 5: Update HTML with all localized asset references
 	updatedHTML, err := updateHTMLWithLocalPaths(htmlContent, base, urlMap)
 	if err != nil {
 		return "", err
@@ -462,6 +468,52 @@ func LocalizeSrcset(srcsetContent string, base *url.URL) (string, error) {
 	return strings.Join(localizedEntries, ", "), nil
 }
 
+// processInlineJavaScript processes inline script tags for template URLs
+func processInlineJavaScript(htmlContent string, base *url.URL) (string, error) {
+	doc, err := html.Parse(strings.NewReader(htmlContent))
+	if err != nil {
+		return "", err
+	}
+	
+	var processScript func(*html.Node)
+	processScript = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "script" {
+			// Check if this is an inline script (no src attribute)
+			var hasSrc bool
+			for _, attr := range n.Attr {
+				if attr.Key == "src" {
+					hasSrc = true
+					break
+				}
+			}
+			
+			if !hasSrc && n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
+				// Process inline JavaScript content
+				scriptContent := n.FirstChild.Data
+				processedContent, err := LocalizeJavaScriptURLs(scriptContent, base)
+				if err == nil && processedContent != scriptContent {
+					n.FirstChild.Data = processedContent
+				}
+			}
+		}
+		
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			processScript(c)
+		}
+	}
+	
+	processScript(doc)
+	
+	// Convert back to HTML
+	var buf strings.Builder
+	err = html.Render(&buf, doc)
+	if err != nil {
+		return "", err
+	}
+	
+	return buf.String(), nil
+}
+
 // LocalizeStyleBackgroundImages processes background images in style attributes
 func LocalizeStyleBackgroundImages(styleContent string, base *url.URL) (string, error) {
 	// Regex to find background-image: url(...) in style attributes
@@ -491,9 +543,48 @@ func LocalizeStyleBackgroundImages(styleContent string, base *url.URL) (string, 
 // LocalizeJavaScriptURLs processes JavaScript content for embedded resource URLs
 func LocalizeJavaScriptURLs(jsContent string, base *url.URL) (string, error) {
 	// Handle template URLs with placeholders like {banner_id}, {type}
-	// Account for escaped slashes in JavaScript
+	// Account for escaped slashes in JavaScript - handle both \/ and / patterns
 	templateRe := regexp.MustCompile(`"([^"]*\\?\/[^"]*\{[^}]+\}[^"]*\.(?:css|js)(?:\?[^"]*)?)"`)
 	templateMatches := templateRe.FindAllStringSubmatch(jsContent, -1)
+	
+	// Also try a more flexible pattern for JSON-encoded URLs (css_file field)
+	if len(templateMatches) == 0 {
+		// Pattern specifically for "css_file":"https:\/\/..." format
+		cssFileRe := regexp.MustCompile(`"css_file":"([^"]*\\?\/[^"]*\{[^}]+\}[^"]*\.(?:css|js)(?:\?[^"]*)?)"`)
+		templateMatches = cssFileRe.FindAllStringSubmatch(jsContent, -1)
+	}
+	
+	// Special handling for Complianz banner CSS with complete template resolution
+	if strings.Contains(jsContent, "css_file") && strings.Contains(jsContent, "banner-{banner_id}-{type}") {
+		// Extract user_banner_id and consenttype from the JSON object
+		userBannerIdRe := regexp.MustCompile(`"user_banner_id":"([^"]+)"`)
+		consentTypeRe := regexp.MustCompile(`"consenttype":"([^"]+)"`)
+		cssFileRe := regexp.MustCompile(`"css_file":"([^"]*banner-\{banner_id\}-\{type\}[^"]*)"`)
+		
+		userBannerMatch := userBannerIdRe.FindStringSubmatch(jsContent)
+		consentTypeMatch := consentTypeRe.FindStringSubmatch(jsContent)
+		cssFileMatch := cssFileRe.FindStringSubmatch(jsContent)
+		
+		if len(userBannerMatch) > 1 && len(consentTypeMatch) > 1 && len(cssFileMatch) > 1 {
+			bannerId := userBannerMatch[1]
+			consentType := consentTypeMatch[1]
+			templateURL := cssFileMatch[1]
+			
+			// Resolve the template URL
+			resolvedURL := strings.ReplaceAll(templateURL, "{banner_id}", bannerId)
+			resolvedURL = strings.ReplaceAll(resolvedURL, "{type}", consentType)
+			resolvedURL = strings.ReplaceAll(resolvedURL, `\/`, "/") // Unescape JSON slashes
+			
+			// Download the resolved CSS file
+			localPath, err := DownloadResource(resolvedURL, "css", base)
+			if err == nil {
+				relativePath := strings.TrimPrefix(localPath, "output/")
+				// Replace both the template URL and resolved URL with local path
+				jsContent = strings.ReplaceAll(jsContent, templateURL, relativePath)
+				jsContent = strings.ReplaceAll(jsContent, resolvedURL, relativePath)
+			}
+		}
+	}
 	
 	for _, match := range templateMatches {
 		if len(match) < 2 {

@@ -11,12 +11,21 @@ import (
 	"time"
 )
 
+// Priority levels for download jobs
+type Priority int
+
+const (
+	HighPriority Priority = iota // CSS, JS, JSON - critical for page rendering
+	LowPriority                  // Images, fonts - can be loaded after critical assets
+)
+
 // DownloadJob represents a single download task
 type DownloadJob struct {
 	URL          string
 	Type         string // "css", "js", "image", "font"
 	OriginalPath string // for HTML replacement
 	BaseURL      *url.URL
+	Priority     Priority // Priority level for this job
 }
 
 // DownloadResult contains the result of a download operation
@@ -29,23 +38,27 @@ type DownloadResult struct {
 
 // ConcurrentDownloader manages parallel downloads with a worker pool
 type ConcurrentDownloader struct {
-	MaxWorkers    int
-	jobs          chan DownloadJob
-	results       chan DownloadResult
-	wg            sync.WaitGroup
-	done          chan struct{}
-	totalJobs     int
-	completedJobs int
-	mu            sync.Mutex
+	MaxWorkers          int
+	highPriorityJobs    chan DownloadJob
+	lowPriorityJobs     chan DownloadJob
+	results             chan DownloadResult
+	wg                  sync.WaitGroup
+	done                chan struct{}
+	totalJobs           int
+	highPriorityJobsCount int
+	lowPriorityJobsCount  int
+	completedJobs       int
+	mu                  sync.Mutex
 }
 
 // NewConcurrentDownloader creates a new concurrent downloader
 func NewConcurrentDownloader(maxWorkers int) *ConcurrentDownloader {
 	return &ConcurrentDownloader{
-		MaxWorkers: maxWorkers,
-		jobs:       make(chan DownloadJob, maxWorkers*2), // Buffer for better performance
-		results:    make(chan DownloadResult, maxWorkers*2),
-		done:       make(chan struct{}),
+		MaxWorkers:       maxWorkers,
+		highPriorityJobs: make(chan DownloadJob, maxWorkers*2), // Buffer for better performance
+		lowPriorityJobs:  make(chan DownloadJob, maxWorkers*2),
+		results:          make(chan DownloadResult, maxWorkers*2),
+		done:             make(chan struct{}),
 	}
 }
 
@@ -57,18 +70,41 @@ func (cd *ConcurrentDownloader) Start() {
 	}
 }
 
-// AddJob queues a download job
+// AddJob queues a download job, routing to appropriate priority queue
 func (cd *ConcurrentDownloader) AddJob(job DownloadJob) {
+	// Auto-assign priority based on asset type if not explicitly set
+	if job.Priority == 0 { // Priority 0 means not set, assign based on type
+		switch job.Type {
+		case "css", "js", "json":
+			job.Priority = HighPriority
+		case "image", "font":
+			job.Priority = LowPriority
+		default:
+			job.Priority = LowPriority // Default to low priority for unknown types
+		}
+	}
+	
 	cd.mu.Lock()
 	cd.totalJobs++
+	if job.Priority == HighPriority {
+		cd.highPriorityJobsCount++
+	} else {
+		cd.lowPriorityJobsCount++
+	}
 	cd.mu.Unlock()
 	
-	cd.jobs <- job
+	// Route to appropriate priority queue
+	if job.Priority == HighPriority {
+		cd.highPriorityJobs <- job
+	} else {
+		cd.lowPriorityJobs <- job
+	}
 }
 
 // FinishJobs signals that no more jobs will be added
 func (cd *ConcurrentDownloader) FinishJobs() {
-	close(cd.jobs)
+	close(cd.highPriorityJobs)
+	close(cd.lowPriorityJobs)
 }
 
 // GetResults collects all download results
@@ -109,11 +145,61 @@ func (cd *ConcurrentDownloader) GetProgress() (completed, total int) {
 	return cd.completedJobs, cd.totalJobs
 }
 
-// worker processes download jobs from the job queue
+// GetDetailedProgress returns priority-specific download progress
+func (cd *ConcurrentDownloader) GetDetailedProgress() (completed, total, highPriority, lowPriority int) {
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	return cd.completedJobs, cd.totalJobs, cd.highPriorityJobsCount, cd.lowPriorityJobsCount
+}
+
+// worker processes download jobs from priority queues
 func (cd *ConcurrentDownloader) worker() {
 	defer cd.wg.Done()
 	
-	for job := range cd.jobs {
+	for {
+		var job DownloadJob
+		var ok bool
+		
+		// Priority-aware job selection: check high priority first, then low priority
+		select {
+		case job, ok = <-cd.highPriorityJobs:
+			if !ok {
+				// High priority queue closed, check if low priority queue is also closed
+				select {
+				case job, ok = <-cd.lowPriorityJobs:
+					if !ok {
+						// Both queues closed, worker exits
+						return
+					}
+				default:
+					// Low priority queue empty and high priority closed, worker exits
+					return
+				}
+			}
+		default:
+			// No high priority jobs available, check low priority
+			select {
+			case job, ok = <-cd.lowPriorityJobs:
+				if !ok {
+					// Low priority queue closed, worker exits
+					return
+				}
+			case job, ok = <-cd.highPriorityJobs:
+				// High priority job arrived while waiting, prioritize it
+				if !ok {
+					// High priority queue closed, check low priority one more time
+					select {
+					case job, ok = <-cd.lowPriorityJobs:
+						if !ok {
+							return
+						}
+					default:
+						return
+					}
+				}
+			}
+		}
+		
 		result := cd.processJob(job)
 		
 		cd.mu.Lock()
@@ -229,10 +315,10 @@ func (pr *ProgressReporter) Start() {
 		for {
 			select {
 			case <-pr.ticker.C:
-				completed, total := pr.downloader.GetProgress()
+				completed, total, highPriority, lowPriority := pr.downloader.GetDetailedProgress()
 				if total > 0 {
-					fmt.Printf("\rDownloading assets: %d/%d (%.1f%%)", 
-						completed, total, float64(completed)/float64(total)*100)
+					fmt.Printf("\rDownloading assets: %d/%d (%.1f%%) [High: %d, Low: %d]", 
+						completed, total, float64(completed)/float64(total)*100, highPriority, lowPriority)
 				}
 			case <-pr.done:
 				return

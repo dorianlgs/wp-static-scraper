@@ -17,7 +17,7 @@ func PrintUsage() {
 	fmt.Println("Scrape options:")
 	fmt.Println("  -url         URL of the website to scrape (required)")
 	fmt.Println("  -out         Output HTML file (default: index.html)")
-	fmt.Println("  -concurrency Number of concurrent downloads (default: 50, range: 1-50)")
+	fmt.Println("  -concurrency Number of concurrent downloads (default: 100, range: 1-100)")
 	fmt.Println("")
 	fmt.Println("Serve options:")
 	fmt.Println("  -port     Port for HTTP server (default: 8080)")

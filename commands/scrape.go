@@ -21,7 +21,7 @@ func ScrapeCommand() {
 	scrapeFlags := flag.NewFlagSet("scrape", flag.ExitOnError)
 	inputURL := scrapeFlags.String("url", "", "URL of the website to scrape")
 	outputFile := scrapeFlags.String("out", "index.html", "Output HTML file")
-	concurrency := scrapeFlags.Int("concurrency", 50, "Number of concurrent downloads (1-50)")
+	concurrency := scrapeFlags.Int("concurrency", 100, "Number of concurrent downloads (1-100)")
 	scrapeFlags.Parse(os.Args[2:])
 
 	if *inputURL == "" {
@@ -31,8 +31,8 @@ func ScrapeCommand() {
 	}
 
 	// Validate concurrency parameter
-	if *concurrency < 1 || *concurrency > 50 {
-		fmt.Println("Concurrency must be between 1 and 50.")
+	if *concurrency < 1 || *concurrency > 100 {
+		fmt.Println("Concurrency must be between 1 and 100.")
 		os.Exit(1)
 	}
 
