@@ -123,6 +123,15 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 					BaseURL:      base,
 				})
 			}
+			if rel == "manifest" && href != "" {
+				resolvedURL := utils.ResolveURL(base, href)
+				jobs = append(jobs, DownloadJob{
+					URL:          resolvedURL,
+					Type:         "json",
+					OriginalPath: href,
+					BaseURL:      base,
+				})
+			}
 		}
 		
 		if n.Type == html.ElementNode && n.Data == "script" {
@@ -272,6 +281,7 @@ func collectStyleBackgroundJobs(styleContent string, base *url.URL) []DownloadJo
 	
 	return jobs
 }
+
 
 // collectFontJobs processes downloaded CSS files to find font URLs
 func collectFontJobs(urlMap map[string]string, base *url.URL) ([]DownloadJob, error) {

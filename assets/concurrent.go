@@ -126,7 +126,7 @@ func (cd *ConcurrentDownloader) processJob(job DownloadJob) DownloadResult {
 		var err error
 		
 		switch job.Type {
-		case "css", "js":
+		case "css", "js", "json":
 			localPath, err = DownloadResource(job.URL, job.Type, job.BaseURL)
 		case "image":
 			localPath, err = DownloadImage(job.URL)
