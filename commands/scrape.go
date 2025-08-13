@@ -21,11 +21,18 @@ func ScrapeCommand() {
 	scrapeFlags := flag.NewFlagSet("scrape", flag.ExitOnError)
 	inputURL := scrapeFlags.String("url", "", "URL of the website to scrape")
 	outputFile := scrapeFlags.String("out", "index.html", "Output HTML file")
+	concurrency := scrapeFlags.Int("concurrency", 10, "Number of concurrent downloads (1-50)")
 	scrapeFlags.Parse(os.Args[2:])
 
 	if *inputURL == "" {
 		fmt.Println("Please provide a URL with -url flag.")
 		scrapeFlags.Usage()
+		os.Exit(1)
+	}
+
+	// Validate concurrency parameter
+	if *concurrency < 1 || *concurrency > 50 {
+		fmt.Println("Concurrency must be between 1 and 50.")
 		os.Exit(1)
 	}
 
@@ -57,7 +64,7 @@ func ScrapeCommand() {
 		os.Exit(1)
 	}
 
-	updatedHTML, err := assets.LocalizeAssets(string(body), base)
+	updatedHTML, err := assets.LocalizeAssets(string(body), base, *concurrency)
 	if err != nil {
 		fmt.Printf("Failed to localize assets: %v\n", err)
 		os.Exit(1)
