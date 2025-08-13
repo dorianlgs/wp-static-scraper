@@ -1,4 +1,4 @@
-module wp_scrap
+module wp-static-scraper
 
 go 1.24.0
 

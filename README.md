@@ -62,11 +62,11 @@ The application supports two main commands: `scrape` for downloading websites an
 
 ## Output Structure
 
-When you run the scraper, it creates:
-- The main HTML file (default: `index.html`) with all references updated to local assets
-- `assets/` directory containing downloaded CSS and JavaScript files
-- `assets/fonts/` directory containing all downloaded font files (TTF, WOFF, WOFF2, EOT, SVG formats)
-- `assets/images/` directory containing all downloaded images (PNG, JPG, GIF, WebP, SVG formats)
+When you run the scraper, it creates an organized `output/` directory:
+- `output/index.html` (or custom filename) with all references updated to local assets
+- `output/assets/` directory containing downloaded CSS and JavaScript files
+- `output/assets/fonts/` directory containing all downloaded font files (TTF, WOFF, WOFF2, EOT, SVG formats)
+- `output/assets/images/` directory containing all downloaded images (PNG, JPG, GIF, WebP, SVG formats)
 
 ## Example Workflow
 
@@ -82,24 +82,25 @@ When you run the scraper, it creates:
 
 This creates the following structure:
 ```
-index.html
-assets/
-  ├── all.min.css
-  ├── style.css
-  ├── main.js
-  ├── other-scripts.js
-  ├── fonts/
-  │   ├── fa-brands-400.woff2
-  │   ├── fa-regular-400.woff2
-  │   ├── fa-solid-900.woff2
-  │   ├── Montserrat-Regular.woff2
-  │   └── other-fonts...
-  └── images/
-      ├── logo.png
-      ├── hero-image.jpg
-      ├── banner-mobile.webp
-      ├── icon.svg
-      └── other-images...
+output/
+├── index.html
+└── assets/
+    ├── all.min.css
+    ├── style.css
+    ├── main.js
+    ├── other-scripts.js
+    ├── fonts/
+    │   ├── fa-brands-400.woff2
+    │   ├── fa-regular-400.woff2
+    │   ├── fa-solid-900.woff2
+    │   ├── Montserrat-Regular.woff2
+    │   └── other-fonts...
+    └── images/
+        ├── logo.png
+        ├── hero-image.jpg
+        ├── banner-mobile.webp
+        ├── icon.svg
+        └── other-images...
 ```
 
 ## Key Features
@@ -138,6 +139,17 @@ The scraper intelligently discovers and downloads all assets referenced in web p
 - Prevents mixing assets from different websites
 - Ensures fresh, clean results every time
 - Creates organized directory structure for easy navigation
+
+## Architecture
+
+The application is built with a modular package structure for maintainability and clarity:
+
+- **`main.go`**: Entry point with command routing
+- **`commands/`**: Command handlers for scrape, serve, and usage
+- **`assets/`**: Asset downloading and processing logic
+- **`html/`**: HTML processing and error suppression utilities
+- **`utils/`**: Shared utilities for cleanup and URL resolution
+- **`output/`**: Generated directory containing scraped content
 
 ## Requirements
 

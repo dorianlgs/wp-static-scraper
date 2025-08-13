@@ -42,32 +42,50 @@ go mod tidy
 
 ## Architecture
 
-The application consists of a single `main.go` file with the following key functions:
+The application is organized into modular packages for maintainability and clarity:
 
-- `main()`: Entry point that routes to commands based on first argument
-- `printUsage()`: Displays help information for available commands
-- `cleanupOldFiles()`: Removes previous assets directory and output HTML file before scraping
-- `scrapeCommand()`: Handles the scraping workflow with auto-cleanup, URL and output file flags
-- `serveCommand()`: Starts HTTP server with proper routing for assets and fonts
-- `localizeAssets()`: Parses HTML and processes `<link>`, `<script>`, `<img>`, and `<meta>` tags to localize all assets
-- `downloadResource()`: Downloads external resources and saves them to the `assets/` directory, processes CSS for fonts and removes source maps
-- `downloadImage()`: Downloads images and saves them to `assets/images/` with proper file extensions
-- `localizeFontURLs()`: Advanced font discovery that processes both absolute URLs, relative paths, and protocol-relative URLs
-- `localizeSrcset()`: Processes responsive image srcset attributes with multiple image URLs and descriptors
-- `localizeStyleBackgroundImages()`: Handles background images in inline style attributes
-- `localizeJavaScriptURLs()`: Processes JavaScript content for embedded resource URLs
-- `removeSourceMapReferences()`: Strips source map comments from CSS and JS files
-- `addErrorSuppressionScript()`: Injects JavaScript to suppress development server and security errors
-- `resolveURL()`: Resolves relative URLs against the base URL
+### Core Packages
+
+**`main.go`**: Entry point that routes to commands based on first argument
+- `main()`: Command routing logic
+
+**`commands/`**: Command handlers and user interface
+- `scrape.go`: `ScrapeCommand()` - Handles the scraping workflow with auto-cleanup, URL and output file flags
+- `serve.go`: `ServeCommand()` - Starts HTTP server with proper routing for assets and fonts
+- `usage.go`: `PrintUsage()` - Displays help information for available commands
+
+**`assets/`**: Asset downloading and processing logic
+- `downloader.go`: `DownloadResource()`, `DownloadImage()` - Downloads external resources and saves them to the `output/assets/` directory
+- `processor.go`: `LocalizeAssets()` - Parses HTML and processes `<link>`, `<script>`, `<img>`, and `<meta>` tags to localize all assets
+  - `LocalizeFontURLs()`: Advanced font discovery that processes both absolute URLs, relative paths, and protocol-relative URLs
+  - `LocalizeSrcset()`: Processes responsive image srcset attributes with multiple image URLs and descriptors
+  - `LocalizeStyleBackgroundImages()`: Handles background images in inline style attributes
+  - `LocalizeJavaScriptURLs()`: Processes JavaScript content for embedded resource URLs
+
+**`html/`**: HTML processing utilities
+- `processor.go`: `AddErrorSuppressionScript()` - Injects JavaScript to suppress development server and security errors
+
+**`utils/`**: Shared utility functions
+- `cleanup.go`: `CleanupOldFiles()`, `EnsureDirectories()` - Removes previous output directory and creates necessary directories
+- `url.go`: `ResolveURL()` - Resolves relative URLs against the base URL
+- Source map processing: `RemoveSourceMapReferences()` - Strips source map comments from CSS and JS files
 
 ## File Structure
 
-- `main.go`: Main application code
-- `assets/`: Directory created at runtime to store downloaded CSS, JavaScript, and other assets
-- `assets/fonts/`: Subdirectory containing all downloaded font files (TTF, WOFF, WOFF2, EOT, SVG)
-- `assets/images/`: Subdirectory containing all downloaded images (PNG, JPG, GIF, WebP, SVG)
-- `index.html`: Default output file (configurable via `-out` flag)
+### Source Code Organization
+- `main.go`: Entry point with command routing
+- `commands/`: Command handlers (scrape.go, serve.go, usage.go)
+- `assets/`: Asset downloading and processing (downloader.go, processor.go)
+- `html/`: HTML processing utilities (processor.go)
+- `utils/`: Shared utilities (cleanup.go, url.go)
 - `wp-static-scraper`: Compiled binary
+
+### Runtime Output Structure
+- `output/`: Root directory for all scraped content
+- `output/index.html`: Default output file (configurable via `-out` flag)
+- `output/assets/`: Directory containing downloaded CSS, JavaScript, and other assets
+- `output/assets/fonts/`: Subdirectory containing all downloaded font files (TTF, WOFF, WOFF2, EOT, SVG)
+- `output/assets/images/`: Subdirectory containing all downloaded images (PNG, JPG, GIF, WebP, SVG)
 
 ## Key Dependencies
 
@@ -121,17 +139,20 @@ The scraper provides comprehensive asset detection and localization:
 
 ### Server Routing
 The HTTP server provides proper routing:
-- `/assets/` - Serves CSS, JS, fonts, and images
-- `/webfonts/` - Alternative path for FontAwesome fonts (maps to `assets/fonts/`)
-- `/fonts/` - Direct font access (maps to `assets/fonts/`)
-- `/images/` - Direct image access (maps to `assets/images/`)
+- `/assets/` - Serves CSS, JS, fonts, and images (maps to `output/assets/`)
+- `/webfonts/` - Alternative path for FontAwesome fonts (maps to `output/assets/fonts/`)
+- `/fonts/` - Direct font access (maps to `output/assets/fonts/`)
+- `/images/` - Direct image access (maps to `output/assets/images/`)
+- `/` - Serves the main HTML file from `output/index.html`
 
 ### Process Flow
-1. **Cleanup**: Remove previous `assets/` directory and output HTML file
-2. **Download**: Fetch HTML and parse for all asset references
-3. **Localize**: Download all assets and update HTML references
-4. **Process**: Remove source maps, process fonts, handle responsive images
-5. **Enhance**: Inject error suppression script
-6. **Serve**: HTTP server with proper MIME types and routing
+1. **Cleanup**: Remove previous `output/` directory and all its contents
+2. **Setup**: Create `output/assets/`, `output/assets/images/`, and `output/assets/fonts/` directories
+3. **Download**: Fetch HTML and parse for all asset references
+4. **Localize**: Download all assets to `output/assets/` and update HTML references
+5. **Process**: Remove source maps, process fonts, handle responsive images
+6. **Enhance**: Inject error suppression script
+7. **Save**: Write final HTML to `output/index.html` (or custom filename)
+8. **Serve**: HTTP server with proper MIME types and routing for the `output/` directory
 
-All assets are downloaded and stored locally with HTML updated to reference local copies, ensuring fully offline-capable static sites with no external dependencies.
+All assets are downloaded and stored locally in the `output/` directory with HTML updated to reference local copies, ensuring fully offline-capable static sites with no external dependencies.

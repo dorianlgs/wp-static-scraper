@@ -5,6 +5,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"wp-static-scraper/assets"
+	"wp-static-scraper/html"
+	"wp-static-scraper/utils"
 )
 
 func TestResolveURL(t *testing.T) {
@@ -42,9 +46,9 @@ func TestResolveURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := resolveURL(base, tt.ref)
+			result := utils.ResolveURL(base, tt.ref)
 			if result != tt.expected {
-				t.Errorf("resolveURL(%q, %q) = %q; want %q", base.String(), tt.ref, result, tt.expected)
+				t.Errorf("ResolveURL(%q, %q) = %q; want %q", base.String(), tt.ref, result, tt.expected)
 			}
 		})
 	}
@@ -85,9 +89,9 @@ func TestRemoveSourceMapReferences(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := removeSourceMapReferences(tt.input)
+			result := utils.RemoveSourceMapReferences(tt.input)
 			if result != tt.expected {
-				t.Errorf("removeSourceMapReferences(%q) = %q; want %q", tt.input, result, tt.expected)
+				t.Errorf("RemoveSourceMapReferences(%q) = %q; want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -108,7 +112,7 @@ func TestCleanupOldFiles(t *testing.T) {
 		t.Fatal("Test directory was not created")
 	}
 
-	// Test cleanup with a mock function (since cleanupOldFiles removes "output" specifically)
+	// Test cleanup with a mock function (since CleanupOldFiles removes "output" specifically)
 	testCleanup := func(outputFile string) {
 		os.RemoveAll(testDir)
 	}
@@ -153,14 +157,14 @@ func TestLocalizeSrcset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := localizeSrcset(tt.input, base)
+			result, err := assets.LocalizeSrcset(tt.input, base)
 			if err != nil {
-				t.Errorf("localizeSrcset returned error: %v", err)
+				t.Errorf("LocalizeSrcset returned error: %v", err)
 			}
 			// For this test, we're mainly checking that the function doesn't crash
 			// In a real implementation, we'd mock the downloadImage function
 			if tt.input == "" && result != tt.expected {
-				t.Errorf("localizeSrcset(%q) = %q; want %q", tt.input, result, tt.expected)
+				t.Errorf("LocalizeSrcset(%q) = %q; want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -193,12 +197,12 @@ func TestLocalizeStyleBackgroundImages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := localizeStyleBackgroundImages(tt.input, base)
+			result, err := assets.LocalizeStyleBackgroundImages(tt.input, base)
 			if err != nil {
-				t.Errorf("localizeStyleBackgroundImages returned error: %v", err)
+				t.Errorf("LocalizeStyleBackgroundImages returned error: %v", err)
 			}
 			if !strings.Contains(result, tt.contains) {
-				t.Errorf("localizeStyleBackgroundImages result should contain %q, got %q", tt.contains, result)
+				t.Errorf("LocalizeStyleBackgroundImages result should contain %q, got %q", tt.contains, result)
 			}
 		})
 	}
@@ -238,10 +242,10 @@ func TestAddErrorSuppressionScript(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := addErrorSuppressionScript(tt.input)
+			result := html.AddErrorSuppressionScript(tt.input)
 			for _, expectedContent := range tt.contains {
 				if !strings.Contains(result, expectedContent) {
-					t.Errorf("addErrorSuppressionScript result should contain %q", expectedContent)
+					t.Errorf("AddErrorSuppressionScript result should contain %q", expectedContent)
 				}
 			}
 			
