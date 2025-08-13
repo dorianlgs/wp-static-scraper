@@ -519,7 +519,7 @@ func removeSourceMapReferences(content string) string {
 	// Remove both CSS and JS source map references
 	// CSS: /*# sourceMappingURL=file.css.map */
 	// JS: //# sourceMappingURL=file.js.map
-	re := regexp.MustCompile(`(/\*#\s*sourceMappingURL=.*?\*/|//#\s*sourceMappingURL=.*?)`)
+	re := regexp.MustCompile(`(/\*#\s*sourceMappingURL=.*?\*/|//#\s*sourceMappingURL=.*)`)
 	return re.ReplaceAllString(content, "")
 }
 
