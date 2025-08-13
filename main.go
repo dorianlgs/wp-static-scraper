@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -54,14 +55,13 @@ func printUsage() {
 }
 
 func cleanupOldFiles(outputFile string) {
-	// Remove assets directory and all its contents (includes images, fonts, etc.)
-	os.RemoveAll("assets")
-
-	// Remove the output HTML file
-	os.Remove(outputFile)
+	// Remove entire output directory and all its contents
+	os.RemoveAll("output")
 }
 
 func scrapeCommand() {
+	startTime := time.Now()
+	
 	scrapeFlags := flag.NewFlagSet("scrape", flag.ExitOnError)
 	inputURL := scrapeFlags.String("url", "", "URL of the website to scrape")
 	outputFile := scrapeFlags.String("out", "index.html", "Output HTML file")
@@ -95,8 +95,8 @@ func scrapeCommand() {
 		os.Exit(1)
 	}
 
-	os.MkdirAll("assets", 0755)
-	os.MkdirAll("assets/images", 0755)
+	os.MkdirAll("output/assets", 0755)
+	os.MkdirAll("output/assets/images", 0755)
 
 	updatedHTML, err := localizeAssets(string(body), base)
 	if err != nil {
@@ -107,13 +107,15 @@ func scrapeCommand() {
 	// Add script to suppress localhost development server errors
 	updatedHTML = addErrorSuppressionScript(updatedHTML)
 
-	err = os.WriteFile(*outputFile, []byte(updatedHTML), 0644)
+	err = os.WriteFile("output/"+*outputFile, []byte(updatedHTML), 0644)
 	if err != nil {
 		fmt.Printf("Failed to write output file: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Static HTML with local assets saved to %s\n", *outputFile)
+	totalTime := time.Since(startTime)
+	fmt.Printf("Static HTML with local assets saved to output/%s\n", *outputFile)
+	fmt.Printf("Total execution time: %.2fs\n", totalTime.Seconds())
 }
 
 func serveCommand() {
@@ -121,28 +123,28 @@ func serveCommand() {
 	port := serveFlags.Int("port", 8080, "Port for HTTP server")
 	serveFlags.Parse(os.Args[2:])
 
-	// Check if index.html exists
-	if _, err := os.Stat("index.html"); os.IsNotExist(err) {
-		fmt.Println("index.html not found. Please run 'scrape' command first.")
+	// Check if output directory and index.html exists
+	if _, err := os.Stat("output/index.html"); os.IsNotExist(err) {
+		fmt.Println("output/index.html not found. Please run 'scrape' command first.")
 		os.Exit(1)
 	}
 
 	// Set up file server for static assets
-	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
+	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("output/assets"))))
 
 	// Handle direct /webfonts/ requests (for CSS files that reference absolute webfonts paths)
-	http.Handle("/webfonts/", http.StripPrefix("/webfonts/", http.FileServer(http.Dir("assets/fonts"))))
+	http.Handle("/webfonts/", http.StripPrefix("/webfonts/", http.FileServer(http.Dir("output/assets/fonts"))))
 
 	// Handle direct /fonts/ requests (for CSS files that reference fonts/ paths)
-	http.Handle("/fonts/", http.StripPrefix("/fonts/", http.FileServer(http.Dir("assets/fonts"))))
+	http.Handle("/fonts/", http.StripPrefix("/fonts/", http.FileServer(http.Dir("output/assets/fonts"))))
 
 	// Handle direct /images/ requests for downloaded images
-	http.Handle("/images/", http.StripPrefix("/images/", http.FileServer(http.Dir("assets/images"))))
+	http.Handle("/images/", http.StripPrefix("/images/", http.FileServer(http.Dir("output/assets/images"))))
 
 	// Serve index.html at root
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			http.ServeFile(w, r, "index.html")
+			http.ServeFile(w, r, "output/index.html")
 		} else {
 			http.NotFound(w, r)
 		}
@@ -182,7 +184,9 @@ func localizeAssets(htmlContent string, base *url.URL) (string, error) {
 				cssURL := resolveURL(base, href)
 				localPath, err := downloadResource(cssURL, "css", base)
 				if err == nil {
-					b.WriteString("<link rel=\"stylesheet\" href=\"" + localPath + "\">")
+					// Convert output/assets/file.css to assets/file.css for HTML references
+					relativePath := strings.TrimPrefix(localPath, "output/")
+					b.WriteString("<link rel=\"stylesheet\" href=\"" + relativePath + "\">")
 				}
 				return // skip writing the original <link>
 			}
@@ -195,8 +199,10 @@ func localizeAssets(htmlContent string, base *url.URL) (string, error) {
 				resourceURL := resolveURL(base, href)
 				localPath, err := downloadResource(resourceURL, "css", base)
 				if err == nil {
+					// Convert output/assets/file.css to assets/file.css for HTML references
+					relativePath := strings.TrimPrefix(localPath, "output/")
 					// Write preload link with local path
-					b.WriteString("<link rel=\"preload\" href=\"" + localPath + "\"")
+					b.WriteString("<link rel=\"preload\" href=\"" + relativePath + "\"")
 					for _, attr := range n.Attr {
 						if attr.Key != "rel" && attr.Key != "href" {
 							b.WriteString(" " + attr.Key + "=\"" + attr.Val + "\"")
@@ -218,7 +224,9 @@ func localizeAssets(htmlContent string, base *url.URL) (string, error) {
 				scriptURL := resolveURL(base, src)
 				localPath, err := downloadResource(scriptURL, "js", base)
 				if err == nil {
-					b.WriteString("<script src=\"" + localPath + "\"></script>")
+					// Convert output/assets/file.js to assets/file.js for HTML references
+					relativePath := strings.TrimPrefix(localPath, "output/")
+					b.WriteString("<script src=\"" + relativePath + "\"></script>")
 				}
 				return // skip writing the original <script src>
 			} else {
@@ -265,7 +273,8 @@ func localizeAssets(htmlContent string, base *url.URL) (string, error) {
 				imageURL := resolveURL(base, src)
 				localPath, err := downloadImage(imageURL)
 				if err == nil {
-					src = localPath
+					// Convert output/assets/images/file.jpg to assets/images/file.jpg for HTML references
+					src = strings.TrimPrefix(localPath, "output/")
 				}
 			}
 
@@ -274,7 +283,8 @@ func localizeAssets(htmlContent string, base *url.URL) (string, error) {
 				imageURL := resolveURL(base, dataSrc)
 				localPath, err := downloadImage(imageURL)
 				if err == nil {
-					dataSrc = localPath
+					// Convert output/assets/images/file.jpg to assets/images/file.jpg for HTML references
+					dataSrc = strings.TrimPrefix(localPath, "output/")
 				}
 			}
 
@@ -328,7 +338,8 @@ func localizeAssets(htmlContent string, base *url.URL) (string, error) {
 				imageURL := resolveURL(base, content)
 				localPath, err := downloadImage(imageURL)
 				if err == nil {
-					content = localPath
+					// Convert output/assets/images/file.jpg to assets/images/file.jpg for HTML references
+					content = strings.TrimPrefix(localPath, "output/")
 				}
 			}
 
@@ -413,7 +424,7 @@ func downloadResource(resourceURL, ext string, base *url.URL) (string, error) {
 	if !strings.HasSuffix(filename, "."+ext) {
 		filename = filename + "." + ext
 	}
-	localPath := "assets/" + filename
+	localPath := "output/assets/" + filename
 
 	// If CSS, also localize font URLs and remove source maps
 	if ext == "css" {
@@ -544,7 +555,9 @@ func localizeSrcset(srcsetContent string, base *url.URL) (string, error) {
 			resolvedURL := resolveURL(base, imageURL)
 			localPath, err := downloadImage(resolvedURL)
 			if err == nil {
-				localizedEntries = append(localizedEntries, localPath+descriptor)
+				// Convert output/assets/images/file.jpg to assets/images/file.jpg for HTML references
+				relativePath := strings.TrimPrefix(localPath, "output/")
+				localizedEntries = append(localizedEntries, relativePath+descriptor)
 			} else {
 				// If download failed, keep original URL
 				localizedEntries = append(localizedEntries, entry)
@@ -599,7 +612,7 @@ func downloadImage(imageURL string) (string, error) {
 		}
 	}
 
-	localPath := "assets/images/" + filename
+	localPath := "output/assets/images/" + filename
 
 	err = os.WriteFile(localPath, data, 0644)
 	if err != nil {
@@ -623,8 +636,10 @@ func localizeStyleBackgroundImages(styleContent string, base *url.URL) (string, 
 			imageURL := resolveURL(base, imagePath)
 			localPath, err := downloadImage(imageURL)
 			if err == nil {
+				// Convert output/assets/images/file.jpg to assets/images/file.jpg for HTML references
+				relativePath := strings.TrimPrefix(localPath, "output/")
 				// Replace the original URL with local path
-				styleContent = strings.ReplaceAll(styleContent, imagePath, localPath)
+				styleContent = strings.ReplaceAll(styleContent, imagePath, relativePath)
 			}
 		}
 	}
@@ -703,8 +718,10 @@ func localizeJavaScriptURLs(jsContent string, base *url.URL) (string, error) {
 				cssURL := resolveURL(base, resolvedURL)
 				localPath, err := downloadResource(cssURL, "css", base)
 				if err == nil {
+					// Convert output/assets/file.css to assets/file.css for HTML references
+					relativePath := strings.TrimPrefix(localPath, "output/")
 					// Replace the template URL with local path in JavaScript
-					jsContent = strings.ReplaceAll(jsContent, `"`+templateURL+`"`, `"`+localPath+`"`)
+					jsContent = strings.ReplaceAll(jsContent, `"`+templateURL+`"`, `"`+relativePath+`"`)
 				}
 			}
 		}
@@ -727,8 +744,10 @@ func localizeJavaScriptURLs(jsContent string, base *url.URL) (string, error) {
 			cssURL := resolveURL(base, unescapedURL)
 			localPath, err := downloadResource(cssURL, "css", base)
 			if err == nil {
+				// Convert output/assets/file.css to assets/file.css for HTML references
+				relativePath := strings.TrimPrefix(localPath, "output/")
 				// Replace the URL with local path in the JavaScript
-				jsContent = strings.ReplaceAll(jsContent, `"`+url+`"`, `"`+localPath+`"`)
+				jsContent = strings.ReplaceAll(jsContent, `"`+url+`"`, `"`+relativePath+`"`)
 			}
 		}
 	}
@@ -737,7 +756,7 @@ func localizeJavaScriptURLs(jsContent string, base *url.URL) (string, error) {
 }
 
 func localizeFontURLs(cssContent string, base *url.URL) (string, error) {
-	fontDir := "assets/fonts/"
+	fontDir := "output/assets/fonts/"
 	os.MkdirAll(fontDir, 0755)
 	// Regex to find url(...) - matches both HTTP URLs and relative paths
 	re := regexp.MustCompile(`url\((['"]?)([^)'"]+)['"]?\)`)
