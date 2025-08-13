@@ -1,7 +1,6 @@
 package assets
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,80 +15,41 @@ import (
 
 // LocalizeAssets processes HTML content and localizes all assets using concurrent downloads
 func LocalizeAssets(htmlContent string, base *url.URL, concurrency int) (string, error) {
-	fmt.Printf("Starting asset localization with %d concurrent workers...\n", concurrency)
-	
-	// Phase 1: Collect all asset URLs without downloading
-	assetJobs, err := collectAssetJobs(htmlContent, base)
+	// Phase 1: Collect ALL asset URLs including fonts from inline CSS upfront
+	allJobs, err := collectAllAssetJobs(htmlContent, base)
 	if err != nil {
 		return "", err
 	}
 	
-	if len(assetJobs) == 0 {
-		fmt.Println("No assets found to download.")
+	if len(allJobs) == 0 {
 		return htmlContent, nil
 	}
 	
-	fmt.Printf("Found %d assets to download\n", len(assetJobs))
-	
-	// Phase 2: Download primary assets (CSS, JS, Images) in parallel
+	// Phase 2: Download ALL assets (CSS, JS, Images, Fonts) in parallel
 	downloader := NewConcurrentDownloader(concurrency)
 	downloader.Start()
 	
-	// Start progress reporting
-	reporter := NewProgressReporter(downloader, 1*time.Second)
+	// Start progress reporting (reduced frequency for better performance)
+	reporter := NewProgressReporter(downloader, 2*time.Second)
 	reporter.Start()
 	
-	// Queue all primary asset jobs
-	for _, job := range assetJobs {
+	// Queue all asset jobs at once - no waiting for CSS to finish
+	for _, job := range allJobs {
 		downloader.AddJob(job)
 	}
 	downloader.FinishJobs()
 	
-	// Get results from primary downloads
+	// Get results from all downloads
 	urlMap := downloader.GetResults()
 	reporter.Stop()
 	
-	fmt.Printf("Downloaded %d assets successfully\n", len(urlMap))
-	
-	// Phase 3: Process CSS files for fonts and download fonts in parallel
-	fontJobs, err := collectFontJobs(urlMap, base)
-	if err != nil {
-		return "", err
-	}
-	
-	if len(fontJobs) > 0 {
-		fmt.Printf("Found %d fonts to download\n", len(fontJobs))
-		
-		// Download fonts in parallel
-		fontDownloader := NewConcurrentDownloader(concurrency)
-		fontDownloader.Start()
-		
-		fontReporter := NewProgressReporter(fontDownloader, 1*time.Second)
-		fontReporter.Start()
-		
-		for _, job := range fontJobs {
-			fontDownloader.AddJob(job)
-		}
-		fontDownloader.FinishJobs()
-		
-		fontMap := fontDownloader.GetResults()
-		fontReporter.Stop()
-		
-		// Merge font results into main URL map
-		for k, v := range fontMap {
-			urlMap[k] = v
-		}
-		
-		fmt.Printf("Downloaded %d fonts successfully\n", len(fontMap))
-	}
-	
-	// Phase 4: Process inline JavaScript for template URLs (like Complianz)
+	// Phase 3: Process inline JavaScript for template URLs (like Complianz)
 	htmlContent, err = processInlineJavaScript(htmlContent, base)
 	if err != nil {
 		return "", err
 	}
 	
-	// Phase 5: Update HTML with all localized asset references
+	// Phase 4: Update HTML with all localized asset references
 	updatedHTML, err := updateHTMLWithLocalPaths(htmlContent, base, urlMap)
 	if err != nil {
 		return "", err
@@ -98,7 +58,22 @@ func LocalizeAssets(htmlContent string, base *url.URL, concurrency int) (string,
 	return updatedHTML, nil
 }
 
-// collectAssetJobs parses HTML and collects all asset download jobs
+// collectAllAssetJobs parses HTML and collects ALL asset download jobs including fonts from inline CSS
+func collectAllAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) {
+	// First collect primary assets
+	jobs, err := collectAssetJobs(htmlContent, base)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Then collect fonts from inline CSS in <style> tags
+	fontJobs := collectInlineFontJobs(htmlContent, base)
+	jobs = append(jobs, fontJobs...)
+	
+	return jobs, nil
+}
+
+// collectAssetJobs parses HTML and collects primary asset download jobs
 func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) {
 	doc, err := html.Parse(strings.NewReader(htmlContent))
 	if err != nil {
@@ -335,28 +310,40 @@ func collectStyleBackgroundJobsWithDupeCheck(styleContent string, base *url.URL,
 }
 
 
-// collectFontJobs processes downloaded CSS files to find font URLs
-func collectFontJobs(urlMap map[string]string, base *url.URL) ([]DownloadJob, error) {
-	var jobs []DownloadJob
-	
-	for _, localPath := range urlMap {
-		// Only process CSS files
-		if !strings.Contains(localPath, ".css") {
-			continue
-		}
-		
-		// Read the downloaded CSS file
-		cssContent, err := os.ReadFile(localPath)
-		if err != nil {
-			continue // Skip if can't read
-		}
-		
-		// Find font URLs in CSS content
-		fontJobs := collectFontJobsFromCSS(string(cssContent), base)
-		jobs = append(jobs, fontJobs...)
+// collectInlineFontJobs extracts font URLs from inline CSS within <style> tags
+func collectInlineFontJobs(htmlContent string, base *url.URL) []DownloadJob {
+	doc, err := html.Parse(strings.NewReader(htmlContent))
+	if err != nil {
+		return nil
 	}
 	
-	return jobs, nil
+	var jobs []DownloadJob
+	urlSeen := make(map[string]bool)
+	
+	var traverse func(*html.Node)
+	traverse = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "style" {
+			if n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
+				cssContent := n.FirstChild.Data
+				fontJobs := collectFontJobsFromCSS(cssContent, base)
+				
+				// Add to jobs with duplicate checking
+				for _, job := range fontJobs {
+					if !urlSeen[job.URL] {
+						urlSeen[job.URL] = true
+						jobs = append(jobs, job)
+					}
+				}
+			}
+		}
+		
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			traverse(c)
+		}
+	}
+	
+	traverse(doc)
+	return jobs
 }
 
 // collectFontJobsFromCSS extracts font URLs from CSS content

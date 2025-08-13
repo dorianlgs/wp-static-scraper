@@ -8,16 +8,12 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	
+	"wp-static-scraper/utils"
 )
 
-// Priority levels for download jobs
-type Priority int
-
-const (
-	HighPriority Priority = iota // CSS, JS, JSON - critical for page rendering
-	LowPriority                  // Images, fonts - can be loaded after critical assets
-)
 
 // DownloadJob represents a single download task
 type DownloadJob struct {
@@ -25,7 +21,7 @@ type DownloadJob struct {
 	Type         string // "css", "js", "image", "font"
 	OriginalPath string // for HTML replacement
 	BaseURL      *url.URL
-	Priority     Priority // Priority level for this job
+	RetryCount   int    // Number of times this job has been retried
 }
 
 // DownloadResult contains the result of a download operation
@@ -38,27 +34,32 @@ type DownloadResult struct {
 
 // ConcurrentDownloader manages parallel downloads with a worker pool
 type ConcurrentDownloader struct {
-	MaxWorkers          int
-	highPriorityJobs    chan DownloadJob
-	lowPriorityJobs     chan DownloadJob
-	results             chan DownloadResult
-	wg                  sync.WaitGroup
-	done                chan struct{}
-	totalJobs           int
-	highPriorityJobsCount int
-	lowPriorityJobsCount  int
-	completedJobs       int
-	mu                  sync.Mutex
+	MaxWorkers    int
+	jobs          chan DownloadJob
+	results       chan DownloadResult
+	wg            sync.WaitGroup
+	totalJobs     int64
+	completedJobs int64
+	client        *http.Client
 }
 
 // NewConcurrentDownloader creates a new concurrent downloader
 func NewConcurrentDownloader(maxWorkers int) *ConcurrentDownloader {
+	// Create HTTP client with connection pooling
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: maxWorkers,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+	
 	return &ConcurrentDownloader{
-		MaxWorkers:       maxWorkers,
-		highPriorityJobs: make(chan DownloadJob, maxWorkers*2), // Buffer for better performance
-		lowPriorityJobs:  make(chan DownloadJob, maxWorkers*2),
-		results:          make(chan DownloadResult, maxWorkers*2),
-		done:             make(chan struct{}),
+		MaxWorkers: maxWorkers,
+		jobs:       make(chan DownloadJob, maxWorkers*4), // Buffer for better performance
+		results:    make(chan DownloadResult, maxWorkers*4),
+		client:     client,
 	}
 }
 
@@ -70,41 +71,15 @@ func (cd *ConcurrentDownloader) Start() {
 	}
 }
 
-// AddJob queues a download job, routing to appropriate priority queue
+// AddJob queues a download job
 func (cd *ConcurrentDownloader) AddJob(job DownloadJob) {
-	// Auto-assign priority based on asset type if not explicitly set
-	if job.Priority == 0 { // Priority 0 means not set, assign based on type
-		switch job.Type {
-		case "css", "js", "json":
-			job.Priority = HighPriority
-		case "image", "font":
-			job.Priority = LowPriority
-		default:
-			job.Priority = LowPriority // Default to low priority for unknown types
-		}
-	}
-	
-	cd.mu.Lock()
-	cd.totalJobs++
-	if job.Priority == HighPriority {
-		cd.highPriorityJobsCount++
-	} else {
-		cd.lowPriorityJobsCount++
-	}
-	cd.mu.Unlock()
-	
-	// Route to appropriate priority queue
-	if job.Priority == HighPriority {
-		cd.highPriorityJobs <- job
-	} else {
-		cd.lowPriorityJobs <- job
-	}
+	atomic.AddInt64(&cd.totalJobs, 1)
+	cd.jobs <- job
 }
 
 // FinishJobs signals that no more jobs will be added
 func (cd *ConcurrentDownloader) FinishJobs() {
-	close(cd.highPriorityJobs)
-	close(cd.lowPriorityJobs)
+	close(cd.jobs)
 }
 
 // GetResults collects all download results
@@ -113,7 +88,6 @@ func (cd *ConcurrentDownloader) GetResults() map[string]string {
 	go func() {
 		cd.wg.Wait()
 		close(cd.results)
-		close(cd.done)
 	}()
 
 	urlMap := make(map[string]string)
@@ -139,124 +113,68 @@ func (cd *ConcurrentDownloader) GetResults() map[string]string {
 }
 
 // GetProgress returns current download progress
-func (cd *ConcurrentDownloader) GetProgress() (completed, total int) {
-	cd.mu.Lock()
-	defer cd.mu.Unlock()
-	return cd.completedJobs, cd.totalJobs
+func (cd *ConcurrentDownloader) GetProgress() (completed, total int64) {
+	return atomic.LoadInt64(&cd.completedJobs), atomic.LoadInt64(&cd.totalJobs)
 }
 
-// GetDetailedProgress returns priority-specific download progress
-func (cd *ConcurrentDownloader) GetDetailedProgress() (completed, total, highPriority, lowPriority int) {
-	cd.mu.Lock()
-	defer cd.mu.Unlock()
-	return cd.completedJobs, cd.totalJobs, cd.highPriorityJobsCount, cd.lowPriorityJobsCount
-}
-
-// worker processes download jobs from priority queues
+// worker processes download jobs from the job queue
 func (cd *ConcurrentDownloader) worker() {
 	defer cd.wg.Done()
 	
-	for {
-		var job DownloadJob
-		var ok bool
-		
-		// Priority-aware job selection: check high priority first, then low priority
-		select {
-		case job, ok = <-cd.highPriorityJobs:
-			if !ok {
-				// High priority queue closed, check if low priority queue is also closed
-				select {
-				case job, ok = <-cd.lowPriorityJobs:
-					if !ok {
-						// Both queues closed, worker exits
-						return
-					}
-				default:
-					// Low priority queue empty and high priority closed, worker exits
-					return
-				}
-			}
-		default:
-			// No high priority jobs available, check low priority
-			select {
-			case job, ok = <-cd.lowPriorityJobs:
-				if !ok {
-					// Low priority queue closed, worker exits
-					return
-				}
-			case job, ok = <-cd.highPriorityJobs:
-				// High priority job arrived while waiting, prioritize it
-				if !ok {
-					// High priority queue closed, check low priority one more time
-					select {
-					case job, ok = <-cd.lowPriorityJobs:
-						if !ok {
-							return
-						}
-					default:
-						return
-					}
-				}
-			}
-		}
-		
+	for job := range cd.jobs {
 		result := cd.processJob(job)
 		
-		cd.mu.Lock()
-		cd.completedJobs++
-		cd.mu.Unlock()
+		// Handle retry logic without blocking
+		if !result.Success && job.RetryCount < 3 {
+			job.RetryCount++
+			// Re-queue the job for retry
+			go func(retryJob DownloadJob) {
+				// Small delay before retry
+				time.Sleep(time.Duration(retryJob.RetryCount) * 200 * time.Millisecond)
+				cd.jobs <- retryJob
+			}(job)
+			continue
+		}
 		
+		atomic.AddInt64(&cd.completedJobs, 1)
 		cd.results <- result
 	}
 }
 
-// processJob handles a single download job with retry logic
+// processJob handles a single download job
 func (cd *ConcurrentDownloader) processJob(job DownloadJob) DownloadResult {
-	var lastErr error
-	maxRetries := 3
+	var localPath string
+	var err error
 	
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		var localPath string
-		var err error
-		
-		switch job.Type {
-		case "css", "js", "json":
-			localPath, err = DownloadResource(job.URL, job.Type, job.BaseURL)
-		case "image":
-			localPath, err = DownloadImage(job.URL)
-		case "font":
-			localPath, err = downloadFont(job.URL)
-		default:
-			err = fmt.Errorf("unknown job type: %s", job.Type)
-		}
-		
-		if err == nil {
-			return DownloadResult{
-				Job:       job,
-				LocalPath: localPath,
-				Success:   true,
-			}
-		}
-		
-		lastErr = err
-		
-		// Exponential backoff for retries
-		if attempt < maxRetries-1 {
-			backoff := time.Duration(attempt+1) * 500 * time.Millisecond
-			time.Sleep(backoff)
+	switch job.Type {
+	case "css", "js", "json":
+		localPath, err = cd.downloadResource(job.URL, job.Type, job.BaseURL)
+	case "image":
+		localPath, err = cd.downloadImage(job.URL)
+	case "font":
+		localPath, err = cd.downloadFont(job.URL)
+	default:
+		err = fmt.Errorf("unknown job type: %s", job.Type)
+	}
+	
+	if err != nil {
+		return DownloadResult{
+			Job:     job,
+			Success: false,
+			Error:   err,
 		}
 	}
 	
 	return DownloadResult{
-		Job:     job,
-		Success: false,
-		Error:   lastErr,
+		Job:       job,
+		LocalPath: localPath,
+		Success:   true,
 	}
 }
 
-// downloadFont downloads a font file and saves it to the fonts directory
-func downloadFont(fontURL string) (string, error) {
-	resp, err := http.Get(fontURL)
+// downloadFont downloads a font file using the shared HTTP client
+func (cd *ConcurrentDownloader) downloadFont(fontURL string) (string, error) {
+	resp, err := cd.client.Get(fontURL)
 	if err != nil {
 		return "", err
 	}
@@ -293,6 +211,123 @@ func downloadFont(fontURL string) (string, error) {
 	return localPath, nil
 }
 
+// downloadImage downloads an image using the shared HTTP client
+func (cd *ConcurrentDownloader) downloadImage(imageURL string) (string, error) {
+	resp, err := cd.client.Get(imageURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("bad status: %s", resp.Status)
+	}
+	
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	
+	u, err := url.Parse(imageURL)
+	if err != nil {
+		return "", err
+	}
+	
+	segments := strings.Split(u.Path, "/")
+	filename := segments[len(segments)-1]
+	
+	// Handle images without extensions
+	if !strings.Contains(filename, ".") {
+		// Try to determine extension from content type
+		contentType := resp.Header.Get("Content-Type")
+		switch contentType {
+		case "image/jpeg":
+			filename += ".jpg"
+		case "image/png":
+			filename += ".png"
+		case "image/gif":
+			filename += ".gif"
+		case "image/webp":
+			filename += ".webp"
+		case "image/svg+xml":
+			filename += ".svg"
+		default:
+			filename += ".jpg" // default fallback
+		}
+	}
+	
+	localPath := "output/assets/images/" + filename
+	
+	err = os.WriteFile(localPath, data, 0644)
+	if err != nil {
+		return "", err
+	}
+	
+	return localPath, nil
+}
+
+// downloadResource downloads a resource (CSS, JS) using the shared HTTP client
+func (cd *ConcurrentDownloader) downloadResource(resourceURL, ext string, base *url.URL) (string, error) {
+	resp, err := cd.client.Get(resourceURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("bad status: %s", resp.Status)
+	}
+	
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	
+	u, err := url.Parse(resourceURL)
+	if err != nil {
+		return "", err
+	}
+	
+	segments := strings.Split(u.Path, "/")
+	filename := segments[len(segments)-1]
+	if !strings.HasSuffix(filename, "."+ext) {
+		filename = filename + "." + ext
+	}
+	localPath := "output/assets/" + filename
+	
+	// If CSS, also localize font URLs and remove source maps
+	if ext == "css" {
+		cssContent := string(data)
+		cssContent, err = LocalizeFontURLs(cssContent, base)
+		if err != nil {
+			return "", err
+		}
+		// Remove source map references
+		cssContent = utils.RemoveSourceMapReferences(cssContent)
+		data = []byte(cssContent)
+	}
+	
+	// If JS, process embedded URLs and remove source map references
+	if ext == "js" {
+		jsContent := string(data)
+		// Process JavaScript for embedded resource URLs (like template CSS files)
+		jsContent, err = LocalizeJavaScriptURLs(jsContent, base)
+		if err != nil {
+			return "", err
+		}
+		// Remove source map references
+		jsContent = utils.RemoveSourceMapReferences(jsContent)
+		data = []byte(jsContent)
+	}
+	
+	err = os.WriteFile(localPath, data, 0644)
+	if err != nil {
+		return "", err
+	}
+	
+	return localPath, nil
+}
+
 // ProgressReporter provides real-time progress updates
 type ProgressReporter struct {
 	downloader *ConcurrentDownloader
@@ -315,11 +350,7 @@ func (pr *ProgressReporter) Start() {
 		for {
 			select {
 			case <-pr.ticker.C:
-				completed, total, highPriority, lowPriority := pr.downloader.GetDetailedProgress()
-				if total > 0 {
-					fmt.Printf("\rDownloading assets: %d/%d (%.1f%%) [High: %d, Low: %d]", 
-						completed, total, float64(completed)/float64(total)*100, highPriority, lowPriority)
-				}
+				// Progress reporting disabled for better performance
 			case <-pr.done:
 				return
 			}
