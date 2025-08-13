@@ -100,6 +100,7 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 	}
 	
 	var jobs []DownloadJob
+	urlSeen := make(map[string]bool) // Prevent duplicates
 	
 	var traverse func(*html.Node)
 	traverse = func(n *html.Node) {
@@ -116,21 +117,39 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 			}
 			if (rel == "stylesheet" || rel == "preload") && href != "" {
 				resolvedURL := utils.ResolveURL(base, href)
-				jobs = append(jobs, DownloadJob{
-					URL:          resolvedURL,
-					Type:         "css",
-					OriginalPath: href,
-					BaseURL:      base,
-				})
+				if !urlSeen[resolvedURL] {
+					urlSeen[resolvedURL] = true
+					jobs = append(jobs, DownloadJob{
+						URL:          resolvedURL,
+						Type:         "css",
+						OriginalPath: href,
+						BaseURL:      base,
+					})
+				}
 			}
 			if rel == "manifest" && href != "" {
 				resolvedURL := utils.ResolveURL(base, href)
-				jobs = append(jobs, DownloadJob{
-					URL:          resolvedURL,
-					Type:         "json",
-					OriginalPath: href,
-					BaseURL:      base,
-				})
+				if !urlSeen[resolvedURL] {
+					urlSeen[resolvedURL] = true
+					jobs = append(jobs, DownloadJob{
+						URL:          resolvedURL,
+						Type:         "json",
+						OriginalPath: href,
+						BaseURL:      base,
+					})
+				}
+			}
+			if (rel == "icon" || rel == "shortcut icon" || rel == "apple-touch-icon") && href != "" {
+				resolvedURL := utils.ResolveURL(base, href)
+				if !urlSeen[resolvedURL] {
+					urlSeen[resolvedURL] = true
+					jobs = append(jobs, DownloadJob{
+						URL:          resolvedURL,
+						Type:         "image",
+						OriginalPath: href,
+						BaseURL:      base,
+					})
+				}
 			}
 		}
 		
@@ -143,12 +162,15 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 			}
 			if src != "" {
 				resolvedURL := utils.ResolveURL(base, src)
-				jobs = append(jobs, DownloadJob{
-					URL:          resolvedURL,
-					Type:         "js",
-					OriginalPath: src,
-					BaseURL:      base,
-				})
+				if !urlSeen[resolvedURL] {
+					urlSeen[resolvedURL] = true
+					jobs = append(jobs, DownloadJob{
+						URL:          resolvedURL,
+						Type:         "js",
+						OriginalPath: src,
+						BaseURL:      base,
+					})
+				}
 			}
 		}
 		
@@ -161,16 +183,19 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 				}
 				if src != "" && (strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://")) {
 					resolvedURL := utils.ResolveURL(base, src)
-					jobs = append(jobs, DownloadJob{
-						URL:          resolvedURL,
-						Type:         "image",
-						OriginalPath: src,
-						BaseURL:      base,
-					})
+					if !urlSeen[resolvedURL] {
+						urlSeen[resolvedURL] = true
+						jobs = append(jobs, DownloadJob{
+							URL:          resolvedURL,
+							Type:         "image",
+							OriginalPath: src,
+							BaseURL:      base,
+						})
+					}
 				}
 				// Handle srcset
 				if attr.Key == "srcset" {
-					srcsetJobs := collectSrcsetJobs(attr.Val, base)
+					srcsetJobs := collectSrcsetJobsWithDupeCheck(attr.Val, base, urlSeen)
 					jobs = append(jobs, srcsetJobs...)
 				}
 			}
@@ -196,12 +221,15 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 			
 			if isImageMeta && content != "" && (strings.HasPrefix(content, "http://") || strings.HasPrefix(content, "https://")) {
 				resolvedURL := utils.ResolveURL(base, content)
-				jobs = append(jobs, DownloadJob{
-					URL:          resolvedURL,
-					Type:         "image",
-					OriginalPath: content,
-					BaseURL:      base,
-				})
+				if !urlSeen[resolvedURL] {
+					urlSeen[resolvedURL] = true
+					jobs = append(jobs, DownloadJob{
+						URL:          resolvedURL,
+						Type:         "image",
+						OriginalPath: content,
+						BaseURL:      base,
+					})
+				}
 			}
 		}
 		
@@ -209,7 +237,7 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 		if n.Type == html.ElementNode {
 			for _, attr := range n.Attr {
 				if attr.Key == "style" && strings.Contains(attr.Val, "background-image") {
-					styleJobs := collectStyleBackgroundJobs(attr.Val, base)
+					styleJobs := collectStyleBackgroundJobsWithDupeCheck(attr.Val, base, urlSeen)
 					jobs = append(jobs, styleJobs...)
 				}
 			}
@@ -224,8 +252,14 @@ func collectAssetJobs(htmlContent string, base *url.URL) ([]DownloadJob, error) 
 	return jobs, nil
 }
 
-// collectSrcsetJobs extracts image URLs from srcset attributes
+// collectSrcsetJobs extracts image URLs from srcset attributes (legacy function)
 func collectSrcsetJobs(srcsetContent string, base *url.URL) []DownloadJob {
+	urlSeen := make(map[string]bool)
+	return collectSrcsetJobsWithDupeCheck(srcsetContent, base, urlSeen)
+}
+
+// collectSrcsetJobsWithDupeCheck extracts image URLs from srcset attributes with duplicate checking
+func collectSrcsetJobsWithDupeCheck(srcsetContent string, base *url.URL, urlSeen map[string]bool) []DownloadJob {
 	var jobs []DownloadJob
 	
 	entries := strings.Split(srcsetContent, ",")
@@ -243,20 +277,29 @@ func collectSrcsetJobs(srcsetContent string, base *url.URL) []DownloadJob {
 		imageURL := parts[0]
 		if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
 			resolvedURL := utils.ResolveURL(base, imageURL)
-			jobs = append(jobs, DownloadJob{
-				URL:          resolvedURL,
-				Type:         "image",
-				OriginalPath: imageURL,
-				BaseURL:      base,
-			})
+			if !urlSeen[resolvedURL] {
+				urlSeen[resolvedURL] = true
+				jobs = append(jobs, DownloadJob{
+					URL:          resolvedURL,
+					Type:         "image",
+					OriginalPath: imageURL,
+					BaseURL:      base,
+				})
+			}
 		}
 	}
 	
 	return jobs
 }
 
-// collectStyleBackgroundJobs extracts background image URLs from style attributes
+// collectStyleBackgroundJobs extracts background image URLs from style attributes (legacy function)
 func collectStyleBackgroundJobs(styleContent string, base *url.URL) []DownloadJob {
+	urlSeen := make(map[string]bool)
+	return collectStyleBackgroundJobsWithDupeCheck(styleContent, base, urlSeen)
+}
+
+// collectStyleBackgroundJobsWithDupeCheck extracts background image URLs from style attributes with duplicate checking
+func collectStyleBackgroundJobsWithDupeCheck(styleContent string, base *url.URL, urlSeen map[string]bool) []DownloadJob {
 	var jobs []DownloadJob
 	
 	re := regexp.MustCompile(`background-image:\s*url\(['"]?([^'"]+)['"]?\)`)
@@ -270,12 +313,15 @@ func collectStyleBackgroundJobs(styleContent string, base *url.URL) []DownloadJo
 		
 		if strings.HasPrefix(imagePath, "http://") || strings.HasPrefix(imagePath, "https://") {
 			resolvedURL := utils.ResolveURL(base, imagePath)
-			jobs = append(jobs, DownloadJob{
-				URL:          resolvedURL,
-				Type:         "image",
-				OriginalPath: imagePath,
-				BaseURL:      base,
-			})
+			if !urlSeen[resolvedURL] {
+				urlSeen[resolvedURL] = true
+				jobs = append(jobs, DownloadJob{
+					URL:          resolvedURL,
+					Type:         "image",
+					OriginalPath: imagePath,
+					BaseURL:      base,
+				})
+			}
 		}
 	}
 	

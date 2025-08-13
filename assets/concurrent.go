@@ -83,11 +83,19 @@ func (cd *ConcurrentDownloader) GetResults() map[string]string {
 	urlMap := make(map[string]string)
 	
 	// Collect results
+	var successCount, failCount int
 	for result := range cd.results {
 		if result.Success {
 			urlMap[result.Job.OriginalPath] = result.LocalPath
-		} else if result.Error != nil {
-			fmt.Printf("Failed to download %s: %v\n", result.Job.URL, result.Error)
+			successCount++
+		} else {
+			failCount++
+			if result.Error != nil {
+				// Only print failures for primary assets (not fonts which we expect to fail)
+				if result.Job.Type != "font" {
+					fmt.Printf("PRIMARY ASSET FAILED: %s (type: %s): %v\n", result.Job.URL, result.Job.Type, result.Error)
+				}
+			}
 		}
 	}
 	
