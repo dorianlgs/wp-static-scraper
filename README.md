@@ -173,3 +173,7 @@ The application is built with a modular package structure for maintainability an
 
 - Go 1.24.0 or later
 - Internet connection for downloading assets
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
